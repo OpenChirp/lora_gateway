@@ -1,0 +1,97 @@
+#!/bin/bash
+#
+# Converts SX1301AP2 FPGA hex images to binaries that can be flashed
+# by other utilities.
+# The binaries are simply the conncatenation of the bytes listed in the hex files.
+# These binaries are then zero extended to match the FPGA's flash size.
+# When parsing the hex files, the \r\n's are omitted.
+#
+# Usage: hex2bin <input_sx1301ap2_fpga_hex_image> <output_sx1301ap2_fpga_bin_image>
+# Example: ./hex2bin SX1301_FPGA_NOTCH_PROG_SPECTRAL_SCAN_v31.hex newimage_padded.bin
+#
+# The output image can be flashed using the flashrom utility.
+# The following is an example using a Raspberry Pi:
+# flashrom -p linux_spi:dev=/dev/spidev0.0 -w ~/newimge_padded.bin -V -c "M25P10-A"
+#
+# Note: We currently need bash to function properly.
+#
+# Craig Hesling <craig@hesling.com>
+# January 18, 2017
+
+# Parse help flag from first argument
+if [ -z "$1" -o "$1" = "--help" -o "$1" = "-h" ]; then
+	echo "This utility converts the FPGA .hex files to .bin binary flash images."
+	echo "Usage: hex2bin <input_sx1301ap2_fpga_hex_image> <output_sx1301ap2_fpga_bin_image>"
+	exit 0
+fi
+
+# The input hex image file
+hexfile=$1
+# The output binary image file
+binfile=$2
+
+# This seems to be the size of FPGA's flash.
+# A binary image will not flash with flashrom if it does not match this size.
+FINALSIZE=131072 # bytes
+
+# Check that the output file does not exist
+if [ -e "${binfile}" ]; then
+	echo "Error - Binary output file already exists" >&2
+	exit 1
+fi
+
+# Iterate over each space separated byte in the input hex file
+for byte in $(cat $hexfile | tr -d '\r' | tr '\n' ' '); do
+	printf "\x${byte}" >> $binfile
+done
+
+# Grab output file size in bytes and input file byte count
+hexbytewords=$(wc -w $hexfile | cut -d ' ' -f 1) # input byte count
+binbytes=$(wc -c $binfile | cut -d ' ' -f 1)     # output size in bytes
+
+# Check that we actually got values
+if [ -z "$hexbytewords" -o -z "$binbytes" ]; then
+	echo "Error - Failed to get byte counts" >&2
+	exit 1
+fi
+
+# Give user a summary
+echo "Detected $hexbytewords bytes in $hexfile"
+echo "Wrote $binbytes bytes to $binfile"
+
+
+# Test if the output binary size matches the byte count of the input hex file
+if [ $hexbytewords -ne $binbytes ]; then
+	echo "Error - Output byte size does not match the number of bytes in the input hex file" >&2
+	exit 1
+else
+	echo "OK - Hex file and binary output file byte counts match"
+fi
+
+# Pad the end of an input file with zeros to match the flash size
+truncate -s $FINALSIZE $binfile
+
+# Another way to pad the end of the file with zeros -- needs a temp file
+# This approach may be needed to support OSX
+#dd if=/dev/zero of=$paddedfile bs=1 count=$FINALSIZE
+#dd if=$origfile of=$paddedfile bs=1 count=$FINALSIZE conv=notrunc
+
+# Grab new output binary size
+binbytes=$(wc -c $binfile | cut -d ' ' -f 1)     # output size in bytes
+
+# Check that we actually got values
+if [ -z "$binbytes" ]; then
+	echo "Error - Failed to get final byte count" >&2
+	exit 1
+fi
+
+# Check that the final binary output file is the correct size
+if [ $binbytes -ne $FINALSIZE ]; then
+	echo "Error - Final image was not expanded to the flash size" >&2
+	echo "Check that your system has the \"truncate\" command and \"wc -c\" counts hole bytes" >&2
+	exit 1
+else
+	echo "OK - Final output binary size is correct"
+fi
+
+exit 0
